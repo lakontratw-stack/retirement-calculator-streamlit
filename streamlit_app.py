@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import importlib
+
 import streamlit as st
 
-from retirement_calculator import PensionProjection, build_projection, get_insured_salary, money
+import retirement_calculator as calculator
+
+calculator = importlib.reload(calculator)
+PensionProjection = calculator.PensionProjection
+build_projection = calculator.build_projection
+get_insured_salary = calculator.get_insured_salary
+money = calculator.money
 
 
 APP_TITLE = "自我工作到退休金試算工具"

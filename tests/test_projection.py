@@ -10,9 +10,14 @@ def test_projection_returns_positive_retirement_values():
         work_start_age=25,
         current_age=35,
         retirement_age=65,
+        first_year_monthly_salary=30_000,
+        first_year_insured_salary=30_300,
         current_monthly_salary=50_000,
-        past_growth_rate=0.02,
+        current_insured_salary=45_800,
         future_growth_rate=0.02,
+        retirement_system="新制",
+        old_system_years=0,
+        retirement_average_wage=None,
         employer_contribution_rate=0.06,
         voluntary_contribution_rate=0.0,
         account_return_rate=0.02,
@@ -26,3 +31,33 @@ def test_projection_returns_positive_retirement_values():
     assert result.avg_top_60_insured_salary == 45_800
     assert result.monthly_labor_annuity > 0
     assert result.estimated_labor_pension_account > 0
+    assert result.estimated_old_system_lump_sum == 0
+
+
+def test_mixed_system_splits_old_and_new_benefits():
+    result = build_projection(
+        work_start_age=22,
+        current_age=50,
+        retirement_age=65,
+        first_year_monthly_salary=25_000,
+        first_year_insured_salary=29_500,
+        current_monthly_salary=80_000,
+        current_insured_salary=45_800,
+        future_growth_rate=0.01,
+        retirement_system="新舊制混合",
+        old_system_years=10,
+        retirement_average_wage=90_000,
+        employer_contribution_rate=0.06,
+        voluntary_contribution_rate=0.0,
+        account_return_rate=0.02,
+        existing_labor_pension_balance=500_000,
+        claim_timing_years=0,
+        life_expectancy_age=85,
+        manual_avg_top_60_salary=None,
+    )
+
+    assert result.old_system_years == 10
+    assert result.new_system_years == 33
+    assert result.old_system_bases == 20
+    assert result.estimated_old_system_lump_sum == 1_800_000
+    assert result.estimated_labor_pension_account > 500_000

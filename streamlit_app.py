@@ -137,7 +137,7 @@ def render_projection(projection: PensionProjection, inputs: dict) -> None:
     st.dataframe(
         df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "估計月薪": st.column_config.NumberColumn(format="NT$ %d"),
             "月投保薪資": st.column_config.NumberColumn(format="NT$ %d"),

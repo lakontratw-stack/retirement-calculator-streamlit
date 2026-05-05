@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+import streamlit as st
+
+from retirement_calculator import PensionProjection, build_projection, get_insured_salary, money
+
+
+APP_TITLE = "自我工作到退休金試算工具"
+DATA_VERSION = "資料基準：民國 115 年（2026-01-01 起適用）"
+DISCLAIMER = (
+    "本工具為情境試算，方便你理解變數如何影響退休金。實際金額、年資、平均月投保薪資、"
+    "勞退個人專戶收益與請領資格，仍以勞保局及勞動部勞工退休金個人專戶資料核定為準。"
+)
+
+def render_sidebar_inputs() -> dict:
+    st.sidebar.header("試算變數")
+    current_age = st.sidebar.number_input("目前年齡", 15, 75, 35, 1)
+    work_start_age = st.sidebar.number_input("開始工作年齡", 15, 75, 25, 1)
+    retirement_age = st.sidebar.number_input("預計退休年齡", 50, 75, 65, 1)
+    life_expectancy_age = st.sidebar.number_input("想估算領到幾歲", 60, 110, 85, 1)
+
+    st.sidebar.divider()
+    current_monthly_salary = st.sidebar.number_input("目前月薪資總額", 1_000, 500_000, 50_000, 1_000)
+    past_growth_rate = st.sidebar.slider("過去薪資年成長率估算", 0.0, 0.08, 0.02, 0.005)
+    future_growth_rate = st.sidebar.slider("未來薪資年成長率估算", 0.0, 0.08, 0.02, 0.005)
+
+    st.sidebar.divider()
+    employer_contribution_rate = st.sidebar.slider("雇主勞退提繳率", 0.06, 0.15, 0.06, 0.01)
+    voluntary_contribution_rate = st.sidebar.slider("個人自願提繳率", 0.0, 0.06, 0.0, 0.01)
+    account_return_rate = st.sidebar.slider("勞退帳戶年化收益率假設", 0.0, 0.06, 0.02, 0.005)
+    existing_labor_pension_balance = st.sidebar.number_input("目前已累積勞退個人專戶餘額", 0, 50_000_000, 0, 10_000)
+
+    st.sidebar.divider()
+    claim_timing_years = st.sidebar.slider("年金請領時間調整", -5, 5, 0, 1)
+    use_manual_avg = st.sidebar.checkbox("我知道自己的最高 60 個月平均月投保薪資")
+    manual_avg_top_60_salary = None
+    if use_manual_avg:
+        manual_avg_top_60_salary = st.sidebar.number_input("手動輸入最高 60 個月平均月投保薪資", 1_000, 45_800, 45_800, 100)
+
+    return {
+        "work_start_age": int(work_start_age),
+        "current_age": int(current_age),
+        "retirement_age": int(retirement_age),
+        "current_monthly_salary": int(current_monthly_salary),
+        "past_growth_rate": float(past_growth_rate),
+        "future_growth_rate": float(future_growth_rate),
+        "employer_contribution_rate": float(employer_contribution_rate),
+        "voluntary_contribution_rate": float(voluntary_contribution_rate),
+        "account_return_rate": float(account_return_rate),
+        "existing_labor_pension_balance": int(existing_labor_pension_balance),
+        "claim_timing_years": int(claim_timing_years),
+        "life_expectancy_age": int(life_expectancy_age),
+        "manual_avg_top_60_salary": int(manual_avg_top_60_salary) if manual_avg_top_60_salary else None,
+    }
+
+
+def render_projection(projection: PensionProjection, inputs: dict) -> None:
+    import pandas as pd
+
+    st.subheader("退休後每月可領估算")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("勞保老年年金（月領）", money(projection.monthly_labor_annuity_adjusted))
+    col2.metric("勞退專戶平均攤提（月）", money(projection.estimated_monthly_labor_pension_drawdown))
+    col3.metric("合計每月現金流", money(projection.total_monthly_retirement_cashflow))
+
+    st.subheader("累積總額估算")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("退休時勞退個人專戶", money(projection.estimated_labor_pension_account))
+    col2.metric("預估可領年金總額", money(projection.projected_lifetime_labor_annuity))
+    col3.metric("年金 + 勞退專戶總額", money(projection.projected_lifetime_total_cashflow))
+
+    st.caption(
+        f"估算年資 {projection.total_work_years:.1f} 年；退休後以領到 "
+        f"{inputs['life_expectancy_age']} 歲估算。"
+    )
+
+    with st.expander("勞保老年年金公式明細", expanded=True):
+        st.write(
+            f"最高 60 個月平均月投保薪資：{money(projection.avg_top_60_insured_salary)}；"
+            f"A 式 {money(projection.labor_annuity_a)}，B 式 {money(projection.labor_annuity_b)}，"
+            f"擇優採 {projection.labor_annuity_formula}。"
+        )
+        if inputs["claim_timing_years"] != 0:
+            direction = "展延" if inputs["claim_timing_years"] > 0 else "提前"
+            st.write(f"已套用{direction}請領 {abs(inputs['claim_timing_years'])} 年，每年 4% 調整。")
+
+    df = pd.DataFrame(projection.rows)
+    st.subheader("逐年估算表")
+    st.dataframe(
+        df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "估計月薪": st.column_config.NumberColumn(format="NT$ %d"),
+            "月投保薪資": st.column_config.NumberColumn(format="NT$ %d"),
+            "勞退月提繳工資估算": st.column_config.NumberColumn(format="NT$ %d"),
+            "每月勞退提繳": st.column_config.NumberColumn(format="NT$ %d"),
+            "年底勞退帳戶估算": st.column_config.NumberColumn(format="NT$ %d"),
+        },
+    )
+    st.line_chart(df.set_index("年齡")[["估計月薪", "月投保薪資", "年底勞退帳戶估算"]])
+
+
+def render_variables_reference() -> None:
+    st.subheader("你需要選填的變數")
+    st.write("最少輸入 5 個，完整試算建議 12 個。")
+    st.markdown(
+        """
+| 變數 | 用途 | 不知道時可怎麼填 |
+|---|---|---|
+| 開始工作年齡 | 推估總勞保年資 | 用第一份正職加保年齡 |
+| 目前年齡 | 分開已工作與未來工作期間 | 用實歲 |
+| 預計退休年齡 | 決定年資與勞退累積期 | 可先填 65 |
+| 目前月薪資總額 | 對應月投保薪資與勞退提繳 | 用固定月薪加常態津貼 |
+| 過去薪資年成長率 | 反推過去薪資軌跡 | 不確定可填 1%-2% |
+| 未來薪資年成長率 | 推估退休前最高 60 個月 | 保守可填 1%-2% |
+| 目前已累積勞退專戶餘額 | 計入已累積本金 | 可到勞保局 e 化服務查詢 |
+| 雇主勞退提繳率 | 預設至少 6% | 通常填 6% |
+| 個人自願提繳率 | 估算自提對專戶的影響 | 沒有自提填 0% |
+| 勞退帳戶年化收益率 | 推估專戶投資收益 | 保守可填 1%-2% |
+| 年金請領時間調整 | 提前或展延請領 | 正常退休填 0 |
+| 預估領到幾歲 | 估算終身總額與月攤提 | 可填 85 或 90 |
+| 最高 60 個月平均月投保薪資 | 讓勞保年金更接近實際 | 知道時手動輸入；不知道由工具估 |
+"""
+    )
+
+
+def render_sources() -> None:
+    st.subheader("目前採用的規則")
+    st.markdown(
+        """
+- 勞保老年年金：A = 平均月投保薪資 × 年資 × 0.775% + 3,000；B = 平均月投保薪資 × 年資 × 1.55%，兩式擇優。
+- 平均月投保薪資：以加保期間最高 60 個月之月投保薪資平均估算。
+- 提前或展延請領：最多 5 年，每年 4% 減給或增給。
+- 勞保投保薪資分級表：採 115 年 1 月 1 日起適用級距，最高月投保薪資 45,800。
+- 勞退新制：預設雇主提繳 6%，可加上個人自願提繳；本工具用月薪估算月提繳工資，非逐級精算。
+"""
+    )
+    st.info(DISCLAIMER)
+
+
+def main() -> None:
+    st.set_page_config(page_title=APP_TITLE, page_icon="💰", layout="wide")
+    st.title(APP_TITLE)
+    st.caption(DATA_VERSION)
+
+    inputs = render_sidebar_inputs()
+    tab_projection, tab_variables, tab_rules = st.tabs(["退休金試算", "變數說明", "規則與限制"])
+
+    with tab_projection:
+        try:
+            projection = build_projection(**inputs)
+            render_projection(projection, inputs)
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tab_variables:
+        render_variables_reference()
+
+    with tab_rules:
+        render_sources()
+
+
+if __name__ == "__main__":
+    main()
